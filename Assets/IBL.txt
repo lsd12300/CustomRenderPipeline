@@ -1,0 +1,7 @@
+
+
+IBL (Image Based Lighting, 基于图像的光照) 
+    是一种 实时,快速的 间接光照方案.
+    通常用一张 .hdr 格式的立方体贴图(CubeMap)  表示环境的辐射度,
+    
+        CubeMap 上每个像素视作一个方向光源, 像素颜色 作为 Radiance值, 参与光照计算

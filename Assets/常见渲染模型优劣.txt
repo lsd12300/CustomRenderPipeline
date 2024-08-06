@@ -1,0 +1,60 @@
+
+
+
+1. Forward Renderer (正向渲染)
+    
+    优点:
+        a. 灵活自定义 Shader Model.  每种材质可以使用不同的光照模型和渲染技术
+        b. 支持透明渲染
+        c. 硬件抗锯齿 MSAA
+        
+    缺点:
+        a. 先着色, 再深度测试, 整体Overdraw过多
+        b. 多光源性能差.  N个物体M个光源下, DrawCall复杂度O(N*M)
+        c. Shader 需适配不同的光源类型, 变体增多
+        
+        
+2. Deferred Render (延迟渲染)
+
+    优点:
+        a. 多光源支持良好, 光源越多优势越明显
+        b. 解耦 MeshDraw 和 LightDraw, 保证物体只会被绘制一次, 光源也只绘制一次. N个物体M个光源下, DrawCall复杂度O(N+M)
+        c. GBuffer除了用于直接光照, 还能应用于间接光照
+        d. 只渲染可见的像素,  节省计算量
+    
+    缺点:
+        a. 内存开销大.  需要存储多张GBuffer
+        b. 需要 MRT支持 (OpenGL|ES 3.0)
+        c. 读写 GBuffer带宽开销大.  每个光源计算都会读取 GBuffer
+        d. 不支持透明渲染.  一般在 Deferred Render之后, 让透明物体走 Forward Render
+        e. MSAA 支持不好
+        
+        
+    实现:
+        1. 多纹理输出 CommandBuffer.SetRenderTarget(RenderTargetIdentifier[] colors, RenderTargetIdentifier depth)
+        
+        2. 片段着色器代码
+            void frag(v2f i, out float4 RT0 : SV_Target0, out float4 RT1 : SV_Target1 ...) { ... }
+            
+            
+    问题:
+        1. Camera 的 HDR 属性,  可能导致报错 Dimensions of color surface does not match dimensions of depth surface
+    
+
+3. Tile Base Forward/Deferred Render  (分块正向/延迟光照)
+    原理:  将屏幕划分成不同的 Tile,  计算影响各个Tile的LightList, 着色时 仅计算 LightList中的光源
+    
+    优点:
+        a. 带宽低, 性能好
+        b. 支持半透明
+        c. 支持 MSAA
+        
+    缺点:
+        a. 不支持 ShadowMap服用
+    
+    
+4. Cluster Base Forward/Deferred Light  (分簇正向/延迟光照)
+    原理:  将相机视椎体分割成不同的 Cluster,  计算影响每个 Cluster的LightList,  着色时 仅计算 LightList中的光源
+    
+    优点: 性能绝大部分情况下 比 Tile Base的好
+
