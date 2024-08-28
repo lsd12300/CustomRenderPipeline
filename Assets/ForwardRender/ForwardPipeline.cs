@@ -13,6 +13,26 @@ namespace ForwardRender
     public partial class ForwardPipeline : RenderPipeline
     {
 
+        //public ClusterLight ClusterLight { get; private set; }
+        public ClusterLight.ClusterLightZbinPlus ClusterLight { get; private set; }
+
+        private ComputeShader m_clusterCs;
+        private ComputeShader m_clusterLightCullCs;
+
+
+        public ForwardPipeline() : base()
+        {
+            //ClusterLight = new ClusterLight(Camera.main);
+        }
+
+        public void SetClusterCS(ComputeShader cs, ComputeShader lightCullCS)
+        {
+            m_clusterCs = cs;
+            m_clusterLightCullCs = lightCullCS;
+            ClusterLight = new ClusterLight.ClusterLightZbinPlus(Camera.main, m_clusterCs, m_clusterLightCullCs);
+        }
+
+
         #region 渲染流程
         protected override void Render(ScriptableRenderContext context, Camera[] cameras)
         {
@@ -37,11 +57,21 @@ namespace ForwardRender
 
             SetUp(context, camera);
 
+            //// Cluster 裁剪数据
+            //ClusterLight.UpdateLight(m_cullingResults.visibleLights);
+            //ClusterLight.SetUpShaderProps(m_cmd);
+
+            ClusterLight.Update(m_cullingResults.visibleLights, m_cmd);
+
+            ExecuteBuffer(context, camera);
+
             DrawVisibleGeometry(context, camera);
 
 
             DrawUnsupportedShaders(context, camera);
             DrawGizmos(context, camera);
+
+            ClusterLight.Debug();
 
             Submit(context, camera);
         }
@@ -65,11 +95,10 @@ namespace ForwardRender
             // 清除渲染目标
             var flags = camera.clearFlags;
             m_cmd.ClearRenderTarget(
-                flags <= CameraClearFlags.Depth,
-                flags == CameraClearFlags.Color,
-                flags == CameraClearFlags.Color ? camera.backgroundColor.linear : Color.clear // 要清除不透明颜色, 只能使用相机的背景色
+                (flags & CameraClearFlags.Depth) != 0,
+                (flags & CameraClearFlags.Color) != 0,
+                camera.backgroundColor
             );
-
 
             //m_cmd.BeginSample(SampleName);
             ExecuteBuffer(context, camera);
@@ -109,7 +138,6 @@ namespace ForwardRender
         {
             // 1. 绘制不透明物体
             var sortSettings = new SortingSettings(camera) { criteria = SortingCriteria.CommonOpaque };
-            //var drawSettings = new DrawingSettings(m_DrawShaderID, sortSettings);
             var drawSettings = new DrawingSettings(m_DrawShaderIDs[0], sortSettings);
             for (int i = 1; i < m_DrawShaderIDs.Length; i++)
             {

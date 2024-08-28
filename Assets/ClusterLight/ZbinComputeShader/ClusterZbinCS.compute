@@ -1,0 +1,130 @@
+﻿/*
+    用于计算相机的视椎体划分
+*/
+#pragma kernel CSMain
+
+
+// 平面
+struct Plane
+{
+    float3 normal; // 法线
+    float dis2Origin; // 沿法线方向与原点的距离
+};
+
+// 视椎体
+struct Frustum
+{
+    Plane top, down, left, right, forward, back; // 视椎体6个面.  上下左右前后
+};
+
+
+RWStructuredBuffer<Frustum> m_frustums;
+int m_perTileSizeX; // 每个 Tile块的 屏幕空间尺寸
+int m_perTileSizeY;
+int m_groupCountX;
+int m_groupCountY;
+int m_screenWidth;
+int m_screenHeight;
+float4x4 m_projInvMt; // 相机投影矩阵的 逆矩阵
+float m_camProjMtM22; // 相机投影矩阵 元素值
+float m_camProjMtM23;
+float m_camNearClipPlane; // 相机远近裁剪面
+float m_camFarClipPlane;
+
+
+
+//  裁剪空间 到 视野空间
+float4 ClipToViewSpace(float4 clipPos)
+{
+    float4 viewPos = mul(m_projInvMt, clipPos);
+    viewPos /= viewPos.w; // 透视除法
+    return viewPos;
+}
+
+
+//  屏幕空间 到 视野空间
+float4 ScreenToViewSpace(float4 screenPos)
+{
+    float2 coord = float2(screenPos.x / m_screenWidth, screenPos.y / m_screenHeight); // 屏幕UV
+    float2 coordNDC = coord * 2 - 1; // NDC空间.  范围 [-1, 1]
+    float clipZ = screenPos.z * m_camProjMtM22 + m_camProjMtM23;
+    float4 clipPos = float4(coordNDC.x, coordNDC.y, clipZ, -screenPos.z);
+
+    return ClipToViewSpace(clipPos);
+}
+
+
+//  直线和Z平面的交点.
+//     用于计算视椎体远裁剪面上顶点
+float3 LineIntersectZPlane(float3 a, float3 b, float z)
+{
+    float3 normal = float3(0, 0, 1); // Z 平面法线
+    float3 ab = b - a;
+
+    // Dot 为投影.
+    float t = (z - dot(normal, a)) / dot(normal, ab);
+
+    return a + t * ab;
+}
+
+
+//  平面内三个点构建平面
+Plane CreatePlane(float3 p1, float3 p2, float3 p3)
+{
+    float3 normal = cross(p2 - p1, p3 - p2);
+    normal = normalize(normal);
+
+    Plane p;
+    p.normal = normal;
+    p.dis2Origin = -dot(normal, p1);
+    return p;
+}
+
+
+// 每个线程处理一个Tile
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID/*, uint3 gid : SV_GroupID, uint gIndex : SV_GroupIndex*/)
+{
+    int tileX = id.x;
+    int tileY = id.y;
+    int viewZ = 1;
+    
+    // Tile分块的 屏幕坐标
+    float4 screenTileCorner0 = float4(tileX * m_perTileSizeX + m_perTileSizeX, tileY * m_perTileSizeY + m_perTileSizeY, viewZ, 1); // 右上
+    float4 screenTileCorner1 = float4(tileX * m_perTileSizeX + m_perTileSizeX, tileY * m_perTileSizeY, viewZ, 1); // 右下
+    float4 screenTileCorner2 = float4(tileX * m_perTileSizeX, tileY * m_perTileSizeY, viewZ, 1); // 左下
+    float4 screenTileCorner3 = float4(tileX * m_perTileSizeX, tileY * m_perTileSizeY + m_perTileSizeY, viewZ, 1); // 左上
+    
+    // Tile分块的 相机空间坐标.
+    float4 tileCornerVS0 = ScreenToViewSpace(screenTileCorner0);
+    float4 tileCornerVS1 = ScreenToViewSpace(screenTileCorner1);
+    float4 tileCornerVS2 = ScreenToViewSpace(screenTileCorner2);
+    float4 tileCornerVS3 = ScreenToViewSpace(screenTileCorner3);
+    
+    // Tile分块 相机空间 远裁剪面上的坐标
+    float3 tileCornerFarVS0 = LineIntersectZPlane(0, tileCornerVS0.xyz, m_camFarClipPlane);
+    float3 tileCornerFarVS1 = LineIntersectZPlane(0, tileCornerVS1.xyz, m_camFarClipPlane);
+    float3 tileCornerFarVS2 = LineIntersectZPlane(0, tileCornerVS2.xyz, m_camFarClipPlane);
+    float3 tileCornerFarVS3 = LineIntersectZPlane(0, tileCornerVS3.xyz, m_camFarClipPlane);
+
+    // Tile分块 相机空间 近裁剪面上的坐标
+    float3 tileCornerNearVS0 = LineIntersectZPlane(0, tileCornerVS0.xyz, m_camNearClipPlane);
+    float3 tileCornerNearVS1 = LineIntersectZPlane(0, tileCornerVS1.xyz, m_camNearClipPlane);
+    float3 tileCornerNearVS2 = LineIntersectZPlane(0, tileCornerVS2.xyz, m_camNearClipPlane);
+    float3 tileCornerNearVS3 = LineIntersectZPlane(0, tileCornerVS3.xyz, m_camNearClipPlane);
+    
+    
+    // 视椎体
+    Frustum frustum;
+    frustum.top = CreatePlane(tileCornerNearVS3, tileCornerNearVS0, tileCornerFarVS0); // 上
+    frustum.down = CreatePlane(tileCornerNearVS1, tileCornerNearVS2, tileCornerFarVS1); // 下
+    frustum.left = CreatePlane(tileCornerNearVS2, tileCornerNearVS3, tileCornerFarVS2); // 左
+    frustum.right = CreatePlane(tileCornerNearVS0, tileCornerNearVS1, tileCornerFarVS0); // 右
+    frustum.forward = CreatePlane(tileCornerNearVS2, tileCornerNearVS1, tileCornerNearVS0); // 前
+    frustum.back = CreatePlane(tileCornerFarVS0, tileCornerFarVS1, tileCornerFarVS2); // 后
+
+    
+    //uint dataIndex = tileY * 64 + tileX; // 横向Tile总数
+    uint dataIndex = tileY * 8 * m_groupCountX + tileX; // 横向Tile总数.  每个Group 横向有8个线程(Tile)
+    m_frustums[dataIndex] = frustum;
+}

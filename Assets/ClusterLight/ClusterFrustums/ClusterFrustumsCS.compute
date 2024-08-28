@@ -1,0 +1,74 @@
+﻿/*
+    NDC 空间取值范围 [-1,1]
+*/
+#pragma kernel CSMain
+
+#include "../ClusterCSBase.hlsl"
+
+
+float m_perFrustumSizeX; // 视椎体划分尺寸
+float m_perFrustumSizeY;
+float m_perFrustumSizeZ;
+float m_camFarClipPlane; // 相机远近裁剪面
+float m_camNearClipPlane;
+int m_groupCountX; // 线程组数量
+int m_groupCountY;
+int m_groupCountZ;
+
+RWStructuredBuffer<Frustum> m_frustums;
+
+
+
+[numthreads(8,8,8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    uint frustumX = id.x;
+    uint frustumY = id.y;
+    uint frustumZ = id.z;
+    float viewZ = 1;
+    
+    
+    // Tile分块的 屏幕坐标
+    float4 screenTileCorner0 = float4(frustumX * m_perFrustumSizeX + m_perFrustumSizeX, frustumY * m_perFrustumSizeY + m_perFrustumSizeY, viewZ, 1); // 右上
+    float4 screenTileCorner1 = float4(frustumX * m_perFrustumSizeX + m_perFrustumSizeX, frustumY * m_perFrustumSizeY, viewZ, 1); // 右下
+    float4 screenTileCorner2 = float4(frustumX * m_perFrustumSizeX, frustumY * m_perFrustumSizeY, viewZ, 1); // 左下
+    float4 screenTileCorner3 = float4(frustumX * m_perFrustumSizeX, frustumY * m_perFrustumSizeY + m_perFrustumSizeY, viewZ, 1); // 左上
+    
+    // Tile分块的 相机空间坐标.
+    float4 tileCornerVS0 = ScreenToViewSpace(screenTileCorner0);
+    float4 tileCornerVS1 = ScreenToViewSpace(screenTileCorner1);
+    float4 tileCornerVS2 = ScreenToViewSpace(screenTileCorner2);
+    float4 tileCornerVS3 = ScreenToViewSpace(screenTileCorner3);
+
+    
+    
+    float minViewZ = m_perFrustumSizeZ * frustumZ + m_camNearClipPlane;
+    float maxViewZ = m_perFrustumSizeZ * frustumZ + m_perFrustumSizeZ + m_camNearClipPlane;
+    
+    // 视椎体 小横截面上点
+    float3 tileCornerFarVS0 = LineIntersectZPlane(0, tileCornerVS0.xyz, minViewZ);
+    float3 tileCornerFarVS1 = LineIntersectZPlane(0, tileCornerVS1.xyz, minViewZ);
+    float3 tileCornerFarVS2 = LineIntersectZPlane(0, tileCornerVS2.xyz, minViewZ);
+    float3 tileCornerFarVS3 = LineIntersectZPlane(0, tileCornerVS3.xyz, minViewZ);
+
+    // 视椎体 大横截面上点
+    float3 tileCornerNearVS0 = LineIntersectZPlane(0, tileCornerVS0.xyz, maxViewZ);
+    float3 tileCornerNearVS1 = LineIntersectZPlane(0, tileCornerVS1.xyz, maxViewZ);
+    float3 tileCornerNearVS2 = LineIntersectZPlane(0, tileCornerVS2.xyz, maxViewZ);
+    float3 tileCornerNearVS3 = LineIntersectZPlane(0, tileCornerVS3.xyz, maxViewZ);
+    
+    
+    // 视椎体
+    Frustum frustum;
+    frustum.top = CreatePlane(tileCornerNearVS3, tileCornerNearVS0, tileCornerFarVS0); // 上
+    frustum.down = CreatePlane(tileCornerNearVS1, tileCornerNearVS2, tileCornerFarVS1); // 下
+    frustum.left = CreatePlane(tileCornerNearVS2, tileCornerNearVS3, tileCornerFarVS2); // 左
+    frustum.right = CreatePlane(tileCornerNearVS0, tileCornerNearVS1, tileCornerFarVS0); // 右
+    frustum.forward = CreatePlane(tileCornerNearVS2, tileCornerNearVS1, tileCornerNearVS0); // 前
+    frustum.back = CreatePlane(tileCornerFarVS0, tileCornerFarVS1, tileCornerFarVS2); // 后
+
+    int tX_gX = m_groupCountX * 8; // 横纵向 线程总数
+    int tY_gY = m_groupCountY * 8;
+    uint index = tX_gX * tY_gY * frustumZ + tX_gX * frustumY + tX_gX;
+    m_frustums[index] = frustum;
+}

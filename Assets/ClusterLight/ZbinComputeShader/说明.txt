@@ -1,0 +1,9 @@
+
+
+使用 ComputeShader加速 ClusterLighting
+
+需要两个 ComputeShader:
+
+    1. ClusterCS.   计算相机视椎体分块
+    
+    2. LightCullingCS.  计算光源和视椎体的相交情况

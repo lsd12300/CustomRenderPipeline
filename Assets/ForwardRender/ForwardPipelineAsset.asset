@@ -12,3 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7984296291072f54f97a8f9ba8a804d7, type: 3}
   m_Name: ForwardPipelineAsset
   m_EditorClassIdentifier: 
+  m_clusterCs: {fileID: 7200000, guid: 6f204c91bd012ee46a9cd5eb682d87cc, type: 3}
+  m_clusterLightCullCs: {fileID: 7200000, guid: ccc58bb15f577944c93f4efbeb3711d7,
+    type: 3}

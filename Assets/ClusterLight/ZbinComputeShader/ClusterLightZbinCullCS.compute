@@ -1,0 +1,142 @@
+﻿/*
+    计算光源和各个视椎体的相交情况
+*/
+#pragma kernel CSMain
+#pragma kernel CSZbinMain
+
+
+// 光源结构
+struct LightInfo
+{
+    float4 color;
+    float3 pos; // 坐标
+    float range; // 点光源范围半径. 0--表示方向光
+};
+
+// 平面
+struct Plane
+{
+    float3 normal; // 法线
+    float dis2Origin; // 沿法线方向与原点的距离
+};
+
+// 视椎体
+struct Frustum
+{
+    Plane top, down, left, right, forward, back; // 视椎体6个面.  上下左右前后
+};
+
+
+RWStructuredBuffer<Frustum> m_frustums; // Cluster Tile视椎体数据
+RWStructuredBuffer<LightInfo> m_lights; // 光源数据
+
+RWStructuredBuffer<uint> m_tileBuffer; // Cluster Tile块内光源索引数据
+RWStructuredBuffer<uint> m_zbinBuffer; // Cluster Zbin段内光源索引数据
+
+float4x4 m_world2ViewMt; // 世界空间到相机空间 矩阵
+int m_lightCount;
+int m_groupCountX;
+int m_groupCountY;
+float m_perZbinSize; // 每段 Zbin长度
+float m_camClipNear;
+
+
+
+//  视椎体和球体相交
+//     球心到平面的距离
+//         绝对值 如果小于半径,  则平面和球体相交
+//         大于0, 在平面正面一侧(可能位于视椎体内部,  需要检查6个面).
+//         小于0, 在平面背面一侧 且 距离超过球体半径时,  此时肯定不会和视椎体有交集
+//         
+//         公式
+//             C--球心坐标 Vector3
+//             N--平面法线 Vector3
+//             D--平面沿法线与原点的距离 float
+//             
+//             球心到平面的距离 = Dot(C, N) + D
+//                 解析:  Dot(C, N) 表示球心投影到平面法线上, 即 球心沿平面法线到原点的距离
+bool IntersectSphere(float3 center, float radius, Frustum frustum)
+{
+    bool ret = true;
+    float dis0 = dot(frustum.top.normal, center) + frustum.top.dis2Origin;
+    float dis1 = dot(frustum.down.normal, center) + frustum.down.dis2Origin;
+    float dis2 = dot(frustum.left.normal, center) + frustum.left.dis2Origin;
+    float dis3 = dot(frustum.right.normal, center) + frustum.right.dis2Origin;
+    float dis4 = dot(frustum.forward.normal, center) + frustum.forward.dis2Origin;
+    float dis5 = dot(frustum.back.normal, center) + frustum.back.dis2Origin;
+
+    ret = ret && (dis0 >= -radius);
+    ret = ret && (dis1 >= -radius);
+    ret = ret && (dis2 >= -radius);
+    ret = ret && (dis3 >= -radius);
+    ret = ret && (dis4 >= -radius);
+    ret = ret && (dis5 >= -radius);
+
+    return ret;
+}
+
+int ViewZToZbinIndex(float viewZ)
+{
+    float z = viewZ - m_camClipNear;
+    return floor(z / m_perZbinSize);
+}
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    int tileX = id.x;
+    int tileY = id.y;
+    
+    uint dataIndex = tileY * 8 * m_groupCountX + tileX; // 横向Tile总数.  每个Group 横向有8个线程(Tile)
+    
+    m_tileBuffer[dataIndex] = 0;
+    for (int i = 0; i < m_lightCount; i++)
+    {
+        if (m_lights[i].range <= 0) // 方向光
+        {
+            m_tileBuffer[dataIndex] = m_tileBuffer[dataIndex] | (1u << i);
+        }
+        else
+        {
+            float4 lightVS = mul(m_world2ViewMt, float4(m_lights[i].pos, 1));
+            lightVS.z = -lightVS.z;
+        
+            bool intersect = IntersectSphere(lightVS.xyz, m_lights[i].range, m_frustums[dataIndex]);
+            if (intersect)
+            {
+                m_tileBuffer[dataIndex] = m_tileBuffer[dataIndex] | (1u << i);
+            }
+        }
+        
+    }
+
+}
+
+
+// 计算 Zbin
+[numthreads(8,1,1)]
+void CSZbinMain(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID)
+{
+    int zbinIndex = id.x;
+    m_zbinBuffer[zbinIndex] = 0;
+    for (int i = 0; i < m_lightCount; i++)
+    {
+        if (m_lights[i].range <= 0) // 方向光
+        {
+            m_zbinBuffer[zbinIndex] = m_zbinBuffer[zbinIndex] | 1u << i;
+        }
+        else
+        {
+            float4 lightVS = mul(m_world2ViewMt, float4(m_lights[i].pos, 1));
+            float viewZ = -lightVS.z; // Unity 会反转 Z值
+            int minZbin = ViewZToZbinIndex(viewZ - m_lights[i].range);
+            int maxZbin = ViewZToZbinIndex(viewZ + m_lights[i].range);
+        
+            if (minZbin <= zbinIndex && zbinIndex <= maxZbin)
+            {
+                m_zbinBuffer[zbinIndex] = m_zbinBuffer[zbinIndex] | 1u << i;
+            }
+        }
+    }
+}

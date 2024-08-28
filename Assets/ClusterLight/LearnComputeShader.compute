@@ -1,0 +1,77 @@
+﻿/*--ComputeShader 学习--*/
+
+
+// kernel 定义核函数,  可携带宏定义
+//  #pragma kernel KernelSecond OTHER_DEFINE
+#pragma kernel CSMain
+
+
+// Shader变体
+// #pragma multi_compile __ COLOR_WHITE COLOR_BLACK
+// #if defined(COLOR_WHITE)
+//  ...
+// #elif defined(COLOR_BLACK)
+//  ...
+// #endif
+//  C# 端开启关闭  ComputeShader.EnableKeyword/DisableKeyword
+
+
+// 声明可读写贴图字段.  RW 读写.
+//   C# 脚本中通过 cs.SetTexture 设置
+RWTexture2D<float4> Result;
+
+
+// 定义常量
+// static float3 boxSize3 = float3(1.0f, 2.0f, 3.0f);
+
+
+
+/*
+线程组(Group)
+    一个线程组在单个 SM(Stream Multiprocessor)上执行. 
+    为更好利用GPU, 每个SM至少需要两个线程组.  因为SM 通过切换处理不同组中的线程 来隐藏线程阻塞(着色器读取贴图时的等待阻塞)
+    每个线程组有各自的 共享内存.  仅组内线程可访问
+
+
+numthreads(tX, tY, tZ) 定义组内线程总数 = tX * tY * tZ
+    cs_4_x 版本中 tZ 最大取值 1,  最大线程总数 768
+    cs_5_0 版本中 tZ 最大取值64,  最大线程总数 1024
+
+    线程数最好是 64的倍数
+        NVIDIA 显卡上, 线程组中的线程被划分到一个个Warp, 每个Warp由32个线程组成, 被 SM调度执行
+        AMD 显卡上, 被划分成一个个 64线程的 Wavefront
+
+
+C# 脚本中使用  Dispatch(gX, gY, gZ) 定义使用多少线程组(总数 = gX * gY * gZ)来处理这个核函数
+    cs_4_x 版本中  gX 和 gY最大取值 65535,  gZ 最大取值 1
+    cs_5_0 版本中  gX 和 gY最大取值 65535,  gZ 最大取值 65535
+
+
+线程参数含义(可想象成三维坐标.  numthreads 指定线程组内线程的排布,  Dispatch 指定线程组的排布)
+    SV_GroupID              int3    当前线程所在的 线程组ID, 取值范围 (0,0,0)---(gX-1, gY-1, gZ-1)
+    SV_GroupThreadID        int3    当前线程所在的 线程组内的编号ID, 取值范围 (0,0,0)---(tX-1, tY-1, tZ-1)
+    SV_GroupIndex           int     当前线程所在的 线程组内的下标, 计算 SV_GroupThreadID=(i,j,k)时 SV_GroupIndex = k*tX*tY + j*tX + i
+    SV_DispatchThreadID     int3    当前线程 在所有线程组中的所有线程里的编号ID,  取值范围 (0,0,0)---(gX*tX-1, gY*tY-1, gZ*tZ-1)
+
+    举例:
+        numthreads(10, 8, 3),  dispatch(5, 3, 2)
+            线程组 SV_GroupID = (2,1,0), 该组内的线程 SV_GroupThreadID = (7,5,0), 对应的
+                SV_GroupIndex = 0*10*8 + 5*10 + 7 = 57
+                SV_DispatchThreadID = [(2,1,0)*(10,8,3)] + (7,5,0) = (27,13,0)
+
+
+核函数可定义传入参数
+    void KernelFunc(uint3 groupId : SV_GroupID,
+                    uint3 groupThreadId : SV_GroupThreadID,
+                    uint3 dispatchThreadId : SV_DispatchThreadID,
+                    uint groupIndex : SV_GroupIndex
+    ) {}
+
+*/
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+
+    Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+}
